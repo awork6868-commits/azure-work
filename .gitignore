@@ -6,7 +6,7 @@ csx
 .vs
 edge
 Publish
-
+.vscode
 *.user
 *.suo
 *.cscfg
@@ -15,8 +15,8 @@ project.lock.json
 
 /packages
 /TestResults
-
 /tools/NuGet.exe
+
 /App_Data
 /secrets
 /data
