@@ -55,11 +55,12 @@ jobs:
       - name: Deploy Azure Function
         uses: Azure/functions-action@v1
         with:
-          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME 
+          }}
           package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
           remote-build: true
 
-  # name: Build and Deploy Python Azure Function (Flex Consumption)
+  # name: Build and Deploy Python Azure Function (Flex Consumption)esersrt
 
   # on:
   #   push:
