@@ -25,9 +25,9 @@ app = func.FunctionApp()
 # Configuration
 # ---------------------------------------------------------
 
-STORAGE_ACCOUNT_NAME = "proservicestorage"
+STORAGE_ACCOUNT_NAME = "datastorageacc12"
 
-LANDING_CONTAINER = "landingzone"
+LANDING_CONTAINER = "landing-zone"
 RAW_CONTAINER = "raw"
 ARCHIVE_CONTAINER = "archive"
 
