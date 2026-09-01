@@ -33,7 +33,9 @@ ARCHIVE_CONTAINER = "archive"
 
 SOURCE_FOLDER = "bhatbhateni"
 
-
+# @app.event_grid_trigger(arg_name="azeventgrid")
+# def EventGridTrigger(azeventgrid: func.EventGridEvent):
+#     logging.info('Python EventGrid trigger processed an event')
 @app.event_grid_trigger(arg_name="azeventgrid")
 def EventGridTrigger(azeventgrid: func.EventGridEvent):
 
