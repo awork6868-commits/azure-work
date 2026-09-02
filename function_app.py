@@ -1,20 +1,10 @@
-# import azure.functions as func
-# import datetime
-# import json
-# import logging
-
-# app = func.FunctionApp()
-
-# @app.event_grid_trigger(arg_name="azeventgrid")
-# def EventGridTrigger(azeventgrid: func.EventGridEvent):
-#     logging.info('Python EventGrid trigger processed an event')
-
-import azure.functions as func
 import datetime
 import logging
 import os
+from urllib.parse import unquote, urlparse
 
-from urllib.parse import urlparse, unquote
+import azure.functions as func
+from azure.core import MatchConditions
 from azure.storage.blob import BlobServiceClient
 
 
@@ -26,6 +16,7 @@ app = func.FunctionApp()
 # ---------------------------------------------------------
 
 STORAGE_ACCOUNT_NAME = "datastorageacc12"
+DATA_CONNECTION_SETTING = "DATA_STORAGE_CONNECTION_STRING"
 
 LANDING_CONTAINER = "landing-zone"
 RAW_CONTAINER = "raw"
@@ -33,187 +24,139 @@ ARCHIVE_CONTAINER = "archive"
 
 SOURCE_FOLDER = "bhatbhateni"
 
-# @app.event_grid_trigger(arg_name="azeventgrid")
-# def EventGridTrigger(azeventgrid: func.EventGridEvent):
-#     logging.info('Python EventGrid trigger processed an event')
+
 @app.event_grid_trigger(arg_name="azeventgrid")
 def EventGridTrigger(azeventgrid: func.EventGridEvent):
 
-    logging.info("==============================================")
+    logging.info("========================================")
     logging.info("Event Grid trigger started")
-    logging.info("==============================================")
+    logging.info("========================================")
 
     try:
-
         # -----------------------------------------------------
         # 1. Read Event Grid event
         # -----------------------------------------------------
 
         event_data = azeventgrid.get_json()
-
-        logging.info(f"Event data: {event_data}")
-
         blob_url = event_data.get("url")
 
         if not blob_url:
-            logging.error("Blob URL not found in Event Grid event.")
-            return
+            raise ValueError(
+                "Blob URL was not found in the Event Grid event."
+            )
 
-        logging.info(f"Blob URL: {blob_url}")
+        logging.info("Blob URL: %s", blob_url)
 
-        # Example:
-        #
-        # https://proservicestorage.blob.core.windows.net/
-        # landingzone/bhatbhateni/sales.csv
-
+        # Expected URL:
+        # https://datastorageacc12.blob.core.windows.net/
+        # landing-zone/bhatbhateni/Book1.csv
 
         # -----------------------------------------------------
-        # 2. Parse blob URL
+        # 2. Parse and validate the blob URL
         # -----------------------------------------------------
 
         parsed_url = urlparse(blob_url)
-
-        storage_host = parsed_url.netloc
 
         expected_host = (
             f"{STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
         )
 
-        # Ignore events from another storage account
-        if storage_host.lower() != expected_host.lower():
+        if parsed_url.netloc.lower() != expected_host.lower():
 
-            logging.warning(
-                f"Ignoring event from storage account: "
-                f"{storage_host}"
+            logging.info(
+                "Ignoring event from another storage account: %s",
+                parsed_url.netloc,
             )
 
             return
 
-
-        # Example path:
-        #
-        # /landingzone/bhatbhateni/sales.csv
-
-        full_path = unquote(parsed_url.path).strip("/")
+        full_path = unquote(
+            parsed_url.path
+        ).strip("/")
 
         path_parts = full_path.split("/")
 
-        if len(path_parts) < 3:
+        # Expected:
+        # landing-zone / bhatbhateni / filename.csv
 
-            logging.warning(
-                f"Unexpected blob path: {full_path}"
-            )
-
-            return
-
-
-        # -----------------------------------------------------
-        # 3. Get container and blob path
-        # -----------------------------------------------------
-
-        source_container = path_parts[0]
-
-        source_blob_path = "/".join(path_parts[1:])
-
-
-        logging.info(
-            f"Source container: {source_container}"
-        )
-
-        logging.info(
-            f"Source blob path: {source_blob_path}"
-        )
-
-
-        # -----------------------------------------------------
-        # 4. IMPORTANT:
-        #    Process ONLY landingzone
-        # -----------------------------------------------------
-
-        if source_container != LANDING_CONTAINER:
+        if len(path_parts) != 3:
 
             logging.info(
-                f"Ignoring event because container is "
-                f"'{source_container}'."
+                "Ignoring unexpected blob path. "
+                "Expected landing-zone/bhatbhateni/<filename>. "
+                "Received: %s",
+                full_path,
             )
 
             return
 
+        source_container = path_parts[0]
+        folder_name = path_parts[1]
+        original_file_name = path_parts[2]
 
         # -----------------------------------------------------
-        # 5. We expect:
-        #
-        # bhatbhateni/file.csv
-        #
-        # No additional subfolders
+        # 3. Process only landing-zone
         # -----------------------------------------------------
 
-        blob_parts = source_blob_path.split("/")
+        if (
+            source_container.lower()
+            != LANDING_CONTAINER.lower()
+        ):
 
-
-        if len(blob_parts) != 2:
-
-            logging.warning(
-                "File ignored. Expected structure: "
-                "landingzone/bhatbhateni/<filename>"
+            logging.info(
+                "Ignoring container: %s",
+                source_container,
             )
 
             return
 
-
-        folder_name = blob_parts[0]
-        original_file_name = blob_parts[1]
-
-
         # -----------------------------------------------------
-        # 6. Only process bhatbhateni folder
+        # 4. Process only bhatbhateni
         # -----------------------------------------------------
 
         if folder_name.lower() != SOURCE_FOLDER.lower():
 
             logging.info(
-                f"Ignoring folder: {folder_name}"
+                "Ignoring folder: %s",
+                folder_name,
             )
 
             return
 
+        if not original_file_name:
 
-        logging.info(
-            f"Original filename: {original_file_name}"
+            logging.info(
+                "Ignoring event without a filename."
+            )
+
+            return
+
+        source_blob_path = (
+            f"{folder_name}/{original_file_name}"
         )
 
+        logging.info(
+            "Source blob: %s/%s",
+            LANDING_CONTAINER,
+            source_blob_path,
+        )
 
         # -----------------------------------------------------
-        # 7. Generate UTC timestamp
-        #
-        # Example:
-        # 20260901_123045
+        # 5. Create timestamped RAW filename
         # -----------------------------------------------------
 
         timestamp = datetime.datetime.now(
             datetime.timezone.utc
-        ).strftime("%Y%m%d_%H%M%S")
+        ).strftime("%Y%m%d_%H%M%S_%f")
 
+        base_name, separator, extension = (
+            original_file_name.rpartition(".")
+        )
 
-        # -----------------------------------------------------
-        # 8. Add timestamp BEFORE extension
-        #
-        # sales.csv
-        #
-        # becomes:
-        #
-        # sales_20260901_123045.csv
-        # -----------------------------------------------------
-
-        if "." in original_file_name:
-
-            file_name_without_extension, extension = (
-                original_file_name.rsplit(".", 1)
-            )
+        if separator and base_name:
 
             raw_file_name = (
-                f"{file_name_without_extension}_"
-                f"{timestamp}.{extension}"
+                f"{base_name}_{timestamp}.{extension}"
             )
 
         else:
@@ -222,55 +165,43 @@ def EventGridTrigger(azeventgrid: func.EventGridEvent):
                 f"{original_file_name}_{timestamp}"
             )
 
-
-        logging.info(
-            f"Raw filename: {raw_file_name}"
-        )
-
-
-        # -----------------------------------------------------
-        # 9. Destination paths
-        # -----------------------------------------------------
-
-        # RAW:
-        #
-        # bhatbhateni/sales_20260901_123045.csv
-
         raw_blob_path = (
             f"{SOURCE_FOLDER}/{raw_file_name}"
         )
-
-
-        # ARCHIVE:
-        #
-        # bhatbhateni/sales.csv
-        #
-        # Exact original filename
 
         archive_blob_path = (
             f"{SOURCE_FOLDER}/{original_file_name}"
         )
 
-
         logging.info(
-            f"RAW destination: "
-            f"{RAW_CONTAINER}/{raw_blob_path}"
+            "RAW destination: %s/%s",
+            RAW_CONTAINER,
+            raw_blob_path,
         )
 
         logging.info(
-            f"ARCHIVE destination: "
-            f"{ARCHIVE_CONTAINER}/{archive_blob_path}"
+            "Archive destination: %s/%s",
+            ARCHIVE_CONTAINER,
+            archive_blob_path,
         )
 
-
         # -----------------------------------------------------
-        # 10. Connect to Azure Storage
+        # 6. Connect to datastorageacc12
         # -----------------------------------------------------
 
-        connection_string = os.environ[
-            "AzureWebJobsStorage"
-        ]
+        # Add DATA_STORAGE_CONNECTION_STRING in:
+        # Function App → Settings → Environment variables
 
+        connection_string = os.getenv(
+            DATA_CONNECTION_SETTING
+        )
+
+        if not connection_string:
+
+            raise RuntimeError(
+                "Missing Function App environment setting: "
+                f"{DATA_CONNECTION_SETTING}"
+            )
 
         blob_service_client = (
             BlobServiceClient.from_connection_string(
@@ -278,55 +209,61 @@ def EventGridTrigger(azeventgrid: func.EventGridEvent):
             )
         )
 
+        # Confirm the connection string points to the
+        # correct storage account.
+
+        connected_account = (
+            blob_service_client.account_name
+        )
+
+        if (
+            connected_account.lower()
+            != STORAGE_ACCOUNT_NAME.lower()
+        ):
+
+            raise RuntimeError(
+                f"{DATA_CONNECTION_SETTING} points to "
+                f"'{connected_account}', but it must point "
+                f"to '{STORAGE_ACCOUNT_NAME}'."
+            )
+
+        logging.info(
+            "Connected to storage account: %s",
+            connected_account,
+        )
 
         # -----------------------------------------------------
-        # 11. Source blob client
+        # 7. Get source blob
         # -----------------------------------------------------
 
         source_blob_client = (
             blob_service_client.get_blob_client(
                 container=LANDING_CONTAINER,
-                blob=source_blob_path
+                blob=source_blob_path,
             )
         )
 
-
-        # -----------------------------------------------------
-        # 12. Check source exists
-        # -----------------------------------------------------
+        # A duplicate Event Grid event may arrive after
+        # the file has already been processed.
 
         if not source_blob_client.exists():
 
-            logging.warning(
-                f"Source blob no longer exists: "
-                f"{source_blob_path}"
+            logging.info(
+                "Source blob is no longer present. "
+                "It may already have been processed: %s/%s",
+                LANDING_CONTAINER,
+                source_blob_path,
             )
 
             return
 
-
         # -----------------------------------------------------
-        # 13. Get source properties
-        #
-        # This lets us retain content type such as:
-        # text/csv
-        # application/json
-        # etc.
+        # 8. Get properties and download
         # -----------------------------------------------------
 
         source_properties = (
             source_blob_client.get_blob_properties()
         )
-
-
-        # -----------------------------------------------------
-        # 14. Download original blob
-        # -----------------------------------------------------
-
-        logging.info(
-            "Downloading file from landingzone..."
-        )
-
 
         blob_data = (
             source_blob_client
@@ -334,139 +271,117 @@ def EventGridTrigger(azeventgrid: func.EventGridEvent):
             .readall()
         )
 
-
         logging.info(
-            f"Downloaded {len(blob_data)} bytes."
+            "Downloaded %d bytes.",
+            len(blob_data),
         )
 
-
         # -----------------------------------------------------
-        # 15. RAW blob client
+        # 9. Upload timestamped copy to RAW
         # -----------------------------------------------------
 
         raw_blob_client = (
             blob_service_client.get_blob_client(
                 container=RAW_CONTAINER,
-                blob=raw_blob_path
+                blob=raw_blob_path,
             )
         )
-
-
-        # -----------------------------------------------------
-        # 16. Upload timestamped file to RAW
-        # -----------------------------------------------------
 
         logging.info(
             "Uploading timestamped file to RAW..."
         )
 
-
         raw_blob_client.upload_blob(
             blob_data,
             overwrite=False,
-            content_settings=source_properties.content_settings,
-            metadata=source_properties.metadata
+            content_settings=(
+                source_properties.content_settings
+            ),
+            metadata=source_properties.metadata,
         )
-
 
         logging.info(
-            f"RAW upload successful: "
-            f"{RAW_CONTAINER}/{raw_blob_path}"
+            "RAW upload successful: %s/%s",
+            RAW_CONTAINER,
+            raw_blob_path,
         )
 
-
         # -----------------------------------------------------
-        # 17. ARCHIVE blob client
+        # 10. Upload original filename to ARCHIVE
         # -----------------------------------------------------
 
         archive_blob_client = (
             blob_service_client.get_blob_client(
                 container=ARCHIVE_CONTAINER,
-                blob=archive_blob_path
+                blob=archive_blob_path,
             )
         )
 
-
-        # -----------------------------------------------------
-        # 18. Copy ORIGINAL file to ARCHIVE
-        #
-        # Original filename is preserved.
-        # -----------------------------------------------------
-
         logging.info(
-            "Moving original file to ARCHIVE..."
+            "Uploading original file to archive..."
         )
-
 
         archive_blob_client.upload_blob(
             blob_data,
-
-            # Important:
-            # If sales.csv already exists in archive,
-            # the latest version replaces it.
             overwrite=True,
-
-            content_settings=source_properties.content_settings,
-            metadata=source_properties.metadata
+            content_settings=(
+                source_properties.content_settings
+            ),
+            metadata=source_properties.metadata,
         )
-
 
         logging.info(
-            f"ARCHIVE upload successful: "
-            f"{ARCHIVE_CONTAINER}/{archive_blob_path}"
+            "Archive upload successful: %s/%s",
+            ARCHIVE_CONTAINER,
+            archive_blob_path,
         )
 
-
         # -----------------------------------------------------
-        # 19. Delete original from landingzone
-        #
-        # Do this ONLY AFTER:
-        #
-        # 1. RAW succeeded
-        # 2. ARCHIVE succeeded
+        # 11. Delete from landing-zone
         # -----------------------------------------------------
+        # This happens only after RAW and archive uploads
+        # have completed successfully.
 
         logging.info(
-            "Deleting original file from landingzone..."
+            "Deleting original file from landing-zone..."
         )
 
-
-        source_blob_client.delete_blob()
-
-
-        logging.info(
-            f"Deleted: "
-            f"{LANDING_CONTAINER}/{source_blob_path}"
+        source_blob_client.delete_blob(
+            delete_snapshots="include",
+            etag=source_properties.etag,
+            match_condition=(
+                MatchConditions.IfNotModified
+            ),
         )
 
-
         # -----------------------------------------------------
-        # 20. Success
+        # 12. Success
         # -----------------------------------------------------
 
-        logging.info("==============================================")
+        logging.info("========================================")
         logging.info("FILE PROCESSING SUCCESSFUL")
         logging.info(
-            f"SOURCE  : "
-            f"{LANDING_CONTAINER}/{source_blob_path}"
+            "SOURCE DELETED: %s/%s",
+            LANDING_CONTAINER,
+            source_blob_path,
         )
         logging.info(
-            f"RAW     : "
-            f"{RAW_CONTAINER}/{raw_blob_path}"
+            "RAW CREATED: %s/%s",
+            RAW_CONTAINER,
+            raw_blob_path,
         )
         logging.info(
-            f"ARCHIVE : "
-            f"{ARCHIVE_CONTAINER}/{archive_blob_path}"
+            "ARCHIVE CREATED: %s/%s",
+            ARCHIVE_CONTAINER,
+            archive_blob_path,
         )
-        logging.info("==============================================")
+        logging.info("========================================")
 
-
-    except Exception as e:
+    except Exception:
 
         logging.exception(
-            f"Error processing Event Grid event: {str(e)}"
+            "Error processing Event Grid event"
         )
 
-        # Raising the exception tells Azure Functions
-        # that processing failed.
+        # Mark the Function invocation as failed.
         raise
